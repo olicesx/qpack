@@ -6,7 +6,7 @@ import (
 	"io"
 	"reflect"
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
 )
 
 func Fuzz(data []byte) int {

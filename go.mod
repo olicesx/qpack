@@ -1,4 +1,4 @@
-module github.com/quic-go/qpack
+module github.com/olicesx/qpack
 
 go 1.24
 

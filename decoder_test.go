@@ -20,21 +20,49 @@ func TestDecoderInvalidInputs(t *testing.T) {
 		name     string
 		input    []byte
 		expected string
+		kind     DecoderErrorKind
 	}{
 		{
 			name:     "non-zero required insert count", // we don't support dynamic table updates
 			input:    append(appendVarInt(nil, 8, 1), appendVarInt(nil, 7, 0)...),
 			expected: "expected Required Insert Count to be zero",
+			kind:     DecoderErrorInvalidRequiredInsertCount,
 		},
 		{
 			name:     "non-zero delta base", // we don't support dynamic table updates
 			input:    append(appendVarInt(nil, 8, 0), appendVarInt(nil, 7, 1)...),
 			expected: "expected Base to be zero",
+			kind:     DecoderErrorInvalidBase,
 		},
 		{
 			name:     "unknown type byte",
 			input:    insertPrefix([]byte{0x10}),
 			expected: "unexpected type byte: 0x10",
+			kind:     DecoderErrorMalformed,
+		},
+		{
+			name:     "oversized required insert count",
+			input:    []byte{0xff, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+			expected: "varint integer overflow",
+			kind:     DecoderErrorValueTooLarge,
+		},
+		{
+			name:     "oversized delta base",
+			input:    []byte{0, 0x7f, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+			expected: "varint integer overflow",
+			kind:     DecoderErrorValueTooLarge,
+		},
+		{
+			name:     "oversized static index",
+			input:    []byte{0, 0, 0xff, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+			expected: "varint integer overflow",
+			kind:     DecoderErrorValueTooLarge,
+		},
+		{
+			name:     "oversized literal value length",
+			input:    []byte{0, 0, 0x21, 'a', 0x7f, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80},
+			expected: "varint integer overflow",
+			kind:     DecoderErrorValueTooLarge,
 		},
 	}
 
@@ -44,6 +72,9 @@ func TestDecoderInvalidInputs(t *testing.T) {
 			decode := dec.Decode(tt.input)
 			_, err := decode()
 			require.EqualError(t, err, tt.expected)
+			var decoderErr *DecoderError
+			require.ErrorAs(t, err, &decoderErr)
+			require.Equal(t, tt.kind, decoderErr.Kind)
 		})
 	}
 }
@@ -193,6 +224,9 @@ func TestDecoderInvalidIndexedHeaderFields(t *testing.T) {
 			decodeFn := dec.Decode(tt.input)
 			_, err := decodeFn()
 			require.EqualError(t, err, tt.expected)
+			var decoderErr *DecoderError
+			require.ErrorAs(t, err, &decoderErr)
+			require.Equal(t, DecoderErrorInvalidReference, decoderErr.Kind)
 		})
 	}
 }

@@ -16,7 +16,11 @@ func (e invalidIndexError) Error() string {
 	return fmt.Sprintf("invalid indexed representation index %d", int(e))
 }
 
-var errNoDynamicTable = errors.New("no dynamic table")
+var (
+	errNoDynamicTable             = errors.New("no dynamic table")
+	errInvalidRequiredInsertCount = errors.New("expected Required Insert Count to be zero")
+	errInvalidBase                = errors.New("expected Base to be zero")
+)
 
 // A Decoder decodes QPACK header blocks.
 // A Decoder can be reused to decode multiple header blocks on different streams
@@ -45,24 +49,24 @@ func (d *Decoder) Decode(p []byte) DecodeFunc {
 		if !readRequiredInsertCount {
 			requiredInsertCount, rest, err := readVarInt(8, p)
 			if err != nil {
-				return HeaderField{}, err
+				return HeaderField{}, classifyDecoderError(err)
 			}
 			p = rest
 			readRequiredInsertCount = true
 			if requiredInsertCount != 0 {
-				return HeaderField{}, errors.New("expected Required Insert Count to be zero")
+				return HeaderField{}, classifyDecoderError(errInvalidRequiredInsertCount)
 			}
 		}
 
 		if !readDeltaBase {
 			base, rest, err := readVarInt(7, p)
 			if err != nil {
-				return HeaderField{}, err
+				return HeaderField{}, classifyDecoderError(err)
 			}
 			p = rest
 			readDeltaBase = true
 			if base != 0 {
-				return HeaderField{}, errors.New("expected Base to be zero")
+				return HeaderField{}, classifyDecoderError(errInvalidBase)
 			}
 		}
 
@@ -86,7 +90,7 @@ func (d *Decoder) Decode(p []byte) DecodeFunc {
 		}
 		p = rest
 		if err != nil {
-			return HeaderField{}, err
+			return HeaderField{}, classifyDecoderError(err)
 		}
 		return hf, nil
 	}

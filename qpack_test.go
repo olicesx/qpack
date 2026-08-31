@@ -8,13 +8,13 @@ import (
 	"testing"
 	_ "unsafe" // for go:linkname
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
 	"github.com/stretchr/testify/require"
 )
 
 var staticTable []qpack.HeaderField
 
-//go:linkname getStaticTable github.com/quic-go/qpack.getStaticTable
+//go:linkname getStaticTable github.com/olicesx/qpack.getStaticTable
 func getStaticTable() []qpack.HeaderField
 
 func init() {

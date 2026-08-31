@@ -8,7 +8,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
 )
 
 func main() {

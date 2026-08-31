@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/quic-go/qpack"
+	"github.com/olicesx/qpack"
 
 	"github.com/stretchr/testify/require"
 )
