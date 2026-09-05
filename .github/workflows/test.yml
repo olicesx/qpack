@@ -1,11 +1,11 @@
-on: [ push, pull_request ]
+on: [ push, pull_request, workflow_dispatch ]
 
 jobs:
   unit:
     strategy:
       fail-fast: false
       matrix:
-        go: [ "1.24.x", "1.25.x" ]
+        go: [ "1.24.x", "1.25.x", "1.26.x" ]
     runs-on: ubuntu-latest
     name: Unit tests (Go ${{ matrix.go }})
     steps:
