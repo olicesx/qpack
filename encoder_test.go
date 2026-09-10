@@ -24,6 +24,22 @@ func (ew *errWriter) Write(b []byte) (int, error) {
 	return ew.Buffer.Write(b)
 }
 
+// partialErrWriter wraps bytes.Buffer, writes half of the data and then fails.
+// Network writers commonly fail after a partial write.
+type partialErrWriter struct {
+	bytes.Buffer
+	fail bool
+}
+
+func (ew *partialErrWriter) Write(b []byte) (int, error) {
+	if ew.fail {
+		n := len(b) / 2
+		ew.Buffer.Write(b[:n])
+		return n, io.ErrClosedPipe
+	}
+	return ew.Buffer.Write(b)
+}
+
 func readPrefix(t *testing.T, data []byte) (rest []byte, requiredInsertCount uint64, deltaBase uint64) {
 	var err error
 	requiredInsertCount, rest, err = readVarInt(8, data)
@@ -102,6 +118,64 @@ func TestEncoderFailsToEncodeWhenWriterErrs(t *testing.T) {
 	hf := HeaderField{Name: "foobar", Value: "lorem ipsum"}
 	err := encoder.WriteField(hf)
 	require.EqualError(t, err, "io: read/write on closed pipe")
+}
+
+// TestEncoderStickyWriteError verifies that a failed write poisons the Encoder:
+// subsequent calls return the same error instead of writing a field section
+// that's missing its Header Block Prefix. Close resets the Encoder.
+func TestEncoderStickyWriteError(t *testing.T) {
+	output := &errWriter{fail: true}
+	encoder := NewEncoder(output)
+
+	hf := HeaderField{Name: "foobar", Value: "lorem ipsum"}
+	require.EqualError(t, encoder.WriteField(hf), "io: read/write on closed pipe")
+
+	output.fail = false
+	for i := range 3 {
+		err := encoder.WriteField(HeaderField{Name: "raboof", Value: "dolor sit amet"})
+		require.EqualError(t, err, "io: read/write on closed pipe", "call %d", i)
+	}
+	require.Empty(t, output.Bytes())
+
+	require.NoError(t, encoder.Close())
+	require.NoError(t, encoder.WriteField(hf))
+	data, requiredInsertCount, deltaBase := readPrefix(t, output.Bytes())
+	require.Zero(t, requiredInsertCount)
+	require.Zero(t, deltaBase)
+	require.Empty(t, checkHeaderField(t, data, hf))
+}
+
+// TestEncoderStickyWriteErrorAfterPartialWrite verifies that the Encoder also
+// stays poisoned after a partial write, where the Writer wrote some bytes
+// before returning an error.
+func TestEncoderStickyWriteErrorAfterPartialWrite(t *testing.T) {
+	output := &partialErrWriter{fail: true}
+	encoder := NewEncoder(output)
+
+	require.EqualError(t,
+		encoder.WriteField(HeaderField{Name: "foobar", Value: "lorem ipsum"}),
+		"io: read/write on closed pipe",
+	)
+	partialLen := output.Len()
+	require.NotZero(t, partialLen)
+
+	// It must not append to the partially written header block,
+	// even though the underlying Writer works again.
+	output.fail = false
+	require.EqualError(t,
+		encoder.WriteField(HeaderField{Name: "raboof", Value: "dolor sit amet"}),
+		"io: read/write on closed pipe",
+	)
+	require.Len(t, output.Bytes(), partialLen)
+
+	// After Close, a new header block (including the prefix) is written.
+	require.NoError(t, encoder.Close())
+	hf := HeaderField{Name: "foobar", Value: "lorem ipsum"}
+	require.NoError(t, encoder.WriteField(hf))
+	data, requiredInsertCount, deltaBase := readPrefix(t, output.Bytes()[partialLen:])
+	require.Zero(t, requiredInsertCount)
+	require.Zero(t, deltaBase)
+	require.Empty(t, checkHeaderField(t, data, hf))
 }
 
 func TestEncoderEncodesMultipleFields(t *testing.T) {

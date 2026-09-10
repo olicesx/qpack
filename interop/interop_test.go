@@ -128,6 +128,80 @@ func findFiles() []string {
 	return files
 }
 
+// errorCorpusKinds is the golden classification of the QIF error corpus
+// (interop/qifs/encoded/errors). A zero kind means that the payload is a valid
+// field section, which is the case for err9 and err10.
+var errorCorpusKinds = map[string]qpack.DecoderErrorKind{
+	"err1":  qpack.DecoderErrorMalformed,        // truncated indexed field
+	"err2":  qpack.DecoderErrorMalformed,        // missing delta base
+	"err3":  qpack.DecoderErrorMalformed,        // truncated delta base
+	"err4":  qpack.DecoderErrorInvalidBase,      // delta base with sign bit set
+	"err5":  qpack.DecoderErrorInvalidReference, // literal field referencing the dynamic table
+	"err6":  qpack.DecoderErrorMalformed,        // truncated name length
+	"err7":  qpack.DecoderErrorMalformed,        // truncated value length
+	"err8":  qpack.DecoderErrorInvalidReference, // indexed field referencing the dynamic table
+	"err9":  0,                                  // valid field section
+	"err10": 0,                                  // valid field section
+	"err11": qpack.DecoderErrorInvalidRequiredInsertCount,
+	"err12": qpack.DecoderErrorInvalidRequiredInsertCount,
+}
+
+func TestInteropErrorCorpus(t *testing.T) {
+	dir := currentDir() + "/qifs/encoded/errors"
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, len(errorCorpusKinds))
+
+	seen := make(map[string]bool)
+	for _, entry := range entries {
+		name := entry.Name()
+		kind, ok := errorCorpusKinds[name]
+		require.True(t, ok, "unexpected file in the error corpus: %s", name)
+		seen[name] = true
+
+		t.Run(name, func(t *testing.T) {
+			require.False(t, entry.IsDir())
+			raw, err := os.ReadFile(filepath.Join(dir, name))
+			require.NoError(t, err)
+
+			// test framework invariants: 8 byte stream ID, 4 byte payload length
+			require.GreaterOrEqual(t, len(raw), 12)
+			streamID := binary.BigEndian.Uint64(raw[:8])
+			length := binary.BigEndian.Uint32(raw[8:12])
+			require.LessOrEqual(t, length, uint32(1<<15))
+			require.NotZero(t, length)
+			require.Equal(t, 12+int(length), len(raw))
+			t.Logf("stream ID %d, payload length %d", streamID, length)
+
+			decoder := qpack.NewDecoder()
+			decode := decoder.Decode(raw[12:])
+			var headers []qpack.HeaderField
+			var decodeErr error
+			for {
+				hf, err := decode()
+				if err != nil {
+					decodeErr = err
+					break
+				}
+				headers = append(headers, hf)
+			}
+
+			if kind == 0 {
+				require.ErrorIs(t, decodeErr, io.EOF)
+				require.NotEmpty(t, headers)
+				return
+			}
+			require.Error(t, decodeErr)
+			var decoderErr *qpack.DecoderError
+			require.ErrorAs(t, decodeErr, &decoderErr)
+			require.Equal(t, kind, decoderErr.Kind)
+		})
+	}
+	for name := range errorCorpusKinds {
+		require.True(t, seen[name], "missing file in the error corpus: %s", name)
+	}
+}
+
 func parseInput(r io.Reader) (uint64, []byte) {
 	prefix := make([]byte, 12)
 	if _, err := io.ReadFull(r, prefix); err != nil {

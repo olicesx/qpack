@@ -1,6 +1,7 @@
 package qpack
 
 import (
+	"fmt"
 	"io"
 	"testing"
 
@@ -29,9 +30,15 @@ func TestDecoderInvalidInputs(t *testing.T) {
 			kind:     DecoderErrorInvalidRequiredInsertCount,
 		},
 		{
-			name:     "non-zero delta base", // we don't support dynamic table updates
-			input:    append(appendVarInt(nil, 8, 0), appendVarInt(nil, 7, 1)...),
-			expected: "expected Base to be zero",
+			name:     "delta base with sign bit set", // we don't support dynamic table updates
+			input:    []byte{0x00, 0x80},
+			expected: "invalid Base: sign bit set with a Required Insert Count of 0",
+			kind:     DecoderErrorInvalidBase,
+		},
+		{
+			name:     "non-zero delta base with sign bit set", // we don't support dynamic table updates
+			input:    []byte{0x00, 0x81},
+			expected: "invalid Base: sign bit set with a Required Insert Count of 0",
 			kind:     DecoderErrorInvalidBase,
 		},
 		{
@@ -190,6 +197,30 @@ func TestDecoderIndexedHeaderFields(t *testing.T) {
 	dec := NewDecoder()
 	decodeFn := dec.Decode(indexedField.Data)
 	require.Equal(t, indexedField.Expected, decodeAll(t, decodeFn))
+}
+
+// TestDecoderAcceptsNonZeroDeltaBase verifies that a Delta Base with a cleared
+// sign bit is accepted, even if it is non-zero.
+// This decoder doesn't support the dynamic table, so the Required Insert Count
+// is always zero, but the Delta Base still has to be parsed correctly
+// (RFC 9204, Section 4.5.1).
+func TestDecoderAcceptsNonZeroDeltaBase(t *testing.T) {
+	for _, deltaBase := range []uint64{0, 1, 5, 127, 4096} {
+		t.Run(fmt.Sprintf("delta base %d", deltaBase), func(t *testing.T) {
+			data := appendVarInt(nil, 8, 0)
+			data = appendVarInt(data, 7, deltaBase)
+			require.Zero(t, data[1]&0x80, "test data must not set the sign bit")
+			data = append(data, 0xc0) // indexed field, referencing static table entry 0
+
+			dec := NewDecoder()
+			decode := dec.Decode(data)
+			hf, err := decode()
+			require.NoError(t, err)
+			require.Equal(t, staticTableEntries[0], hf)
+			_, err = decode()
+			require.ErrorIs(t, err, io.EOF)
+		})
+	}
 }
 
 func TestDecoderInvalidIndexedHeaderFields(t *testing.T) {

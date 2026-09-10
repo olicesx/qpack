@@ -19,7 +19,7 @@ func (e invalidIndexError) Error() string {
 var (
 	errNoDynamicTable             = errors.New("no dynamic table")
 	errInvalidRequiredInsertCount = errors.New("expected Required Insert Count to be zero")
-	errInvalidBase                = errors.New("expected Base to be zero")
+	errInvalidBase                = errors.New("invalid Base: sign bit set with a Required Insert Count of 0")
 )
 
 // A Decoder decodes QPACK header blocks.
@@ -59,13 +59,26 @@ func (d *Decoder) Decode(p []byte) DecodeFunc {
 		}
 
 		if !readDeltaBase {
-			base, rest, err := readVarInt(7, p)
+			if len(p) == 0 {
+				return HeaderField{}, classifyDecoderError(io.ErrUnexpectedEOF)
+			}
+			// The Delta Base is encoded as a sign bit, followed by a 7 bit
+			// prefix integer (RFC 9204, Section 4.5.1). readVarInt only reads
+			// the integer, and masks the sign bit off, so read it here.
+			sign := p[0]&0x80 != 0
+			_, rest, err := readVarInt(7, p)
 			if err != nil {
 				return HeaderField{}, classifyDecoderError(err)
 			}
 			p = rest
 			readDeltaBase = true
-			if base != 0 {
+			// Since this decoder doesn't support the dynamic table, the
+			// Required Insert Count is always zero. RFC 9204, Section 4.5.1
+			// defines Base = Sign * (Required Insert Count - Delta Base - 1) +
+			// (1 - Sign) * (Required Insert Count + Delta Base), which is
+			// negative (and therefore invalid) for a Required Insert Count of
+			// zero and a sign bit of 1, independent of the Delta Base.
+			if sign {
 				return HeaderField{}, classifyDecoderError(errInvalidBase)
 			}
 		}
@@ -158,6 +171,16 @@ func (d *Decoder) parseLiteralHeaderFieldWithoutNameReference(buf []byte) (_ Hea
 	return HeaderField{Name: name, Value: val}, rest, nil
 }
 
+// readString reads a string literal, encoded as a variable length integer
+// (length) followed by that many bytes (RFC 9204, Section 4.1.2),
+// using an n bit prefix for the length.
+//
+// No maximum length is enforced here: the length is bounded by the size of the
+// field section, and the caller is responsible for that bound (in quic-go's
+// HTTP/3 stack that's maxHeaderBytes, accounted per header field).
+// If the declared length exceeds the remaining buffer, the string is treated
+// as a truncated field section, which classifyDecoderError reports as
+// DecoderErrorMalformed, i.e. a connection error at the HTTP/3 layer.
 func (d *Decoder) readString(buf []byte, n uint8, usesHuffman bool) (string, []byte, error) {
 	l, buf, err := readVarInt(n, buf)
 	if err != nil {

@@ -10,6 +10,15 @@ import (
 type Encoder struct {
 	wrotePrefix bool
 
+	// writeErr is set if a write to the underlying Writer failed.
+	// Once set, WriteField returns this error without writing anything,
+	// until the Encoder is reset by calling Close.
+	// A failed write leaves the Header Block in an undefined state (it might be
+	// missing the Header Block Prefix, or the field might have been written
+	// partially). Returning the error again avoids encoding a corrupt field
+	// section on top of the damage.
+	writeErr error
+
 	w   io.Writer
 	buf []byte
 }
@@ -23,7 +32,13 @@ func NewEncoder(w io.Writer) *Encoder {
 // WriteField encodes f into a single Write to e's underlying Writer.
 // This function may also produce bytes for the Header Block Prefix
 // if necessary. If produced, it is done before encoding f.
+// If a previous call to WriteField failed, WriteField returns that error
+// without writing anything, until the Encoder is reset by calling Close.
 func (e *Encoder) WriteField(f HeaderField) error {
+	if e.writeErr != nil {
+		return e.writeErr
+	}
+
 	// write the Header Block Prefix
 	if !e.wrotePrefix {
 		e.buf = appendVarInt(e.buf, 8, 0)
@@ -53,6 +68,9 @@ func (e *Encoder) WriteField(f HeaderField) error {
 
 	_, err := e.w.Write(e.buf)
 	e.buf = e.buf[:0]
+	if err != nil {
+		e.writeErr = err
+	}
 	return err
 }
 
@@ -60,6 +78,7 @@ func (e *Encoder) WriteField(f HeaderField) error {
 // to be reused again for a new header block.
 func (e *Encoder) Close() error {
 	e.wrotePrefix = false
+	e.writeErr = nil
 	return nil
 }
 
