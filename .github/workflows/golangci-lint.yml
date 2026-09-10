@@ -19,6 +19,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GOLANGCI_LINT_VERSION: v2.11.4
+      # golangci-lint is a Go module of its own, and v2.11.4 requires Go >=
+      # 1.25.0 to build (see its go.mod). setup-go@v6 exports GOTOOLCHAIN=local,
+      # which turns that requirement into a hard failure of the 1.24 leg - a
+      # property of the tool, not a problem with this repository. auto lets the
+      # toolchain switch for the linter's own build; the lint run itself still
+      # uses this leg's Go, because this module asks for 1.24 or newer.
+      GOTOOLCHAIN: auto
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -28,14 +35,16 @@ jobs:
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
       - name: Assert linter Go version >= module Go version
         # Fail closed: a linter that's too old for the module's Go version would
-        # silently reduce analysis fidelity. Separate "tool too old" from
-        # "code violates the linter".
+        # silently reduce analysis fidelity. "the linter is too old" and "the
+        # linter's Go version cannot be read" are reported separately, and the
+        # raw version output is included so the two can be told apart.
         run: |
           set -euo pipefail
           want="go$(awk '/^go /{print $2; exit}' go.mod)"
-          got="$(golangci-lint version 2>&1 | sed -n 's/.*built with \(go[0-9.]*\).*/\1/p')"
+          version_output="$(golangci-lint version 2>&1)"
+          got="$(printf '%s\n' "$version_output" | sed -n 's/.*built with \(go[0-9][0-9.]*\).*/\1/p' | head -1)"
           if [ -z "$got" ]; then
-            echo "::error::could not determine the Go version golangci-lint was built with"
+            echo "::error::could not determine the Go version golangci-lint was built with; golangci-lint version reported: ${version_output}"
             exit 1
           fi
           if [ "$(printf '%s\n%s\n' "$want" "$got" | sort -V | head -1)" != "$want" ]; then
