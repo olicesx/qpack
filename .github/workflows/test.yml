@@ -16,6 +16,20 @@ jobs:
         with: 
           go-version: ${{ matrix.go }}
       - run: go version
+      - name: Assert fuzz targets are buildable
+        # Fail closed: a stale package path in the ClusterFuzzLite build script
+        # silently disables fuzzing (the CFL workflow only runs on pull_request).
+        run: |
+          set -euo pipefail
+          mapfile -t targets < <(sed -n 's/.*compile_go_fuzzer[[:space:]]\+\([^[:space:]]*\).*/\1/p' .clusterfuzzlite/build.sh)
+          if [ "${#targets[@]}" -eq 0 ]; then
+            echo "::error::no compile_go_fuzzer target found in .clusterfuzzlite/build.sh"
+            exit 1
+          fi
+          for target in "${targets[@]}"; do
+            echo "building fuzz target: ${target}"
+            go build "${target}"
+          done
       - name: Run example
         run: go run example/main.go
       - name: Run tests
